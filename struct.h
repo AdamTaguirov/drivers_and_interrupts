@@ -1,9 +1,22 @@
 #ifndef STRUCT_H
 # define STRUCT_H
 
-char simple_scancodes[] = {
+static struct		s_stroke {
+	unsigned char	key;
+	unsigned char	state;
+	char		*name;
+	char		value;
+	char		multi;
+	struct tm	time;
+	struct s_stroke	*next;
+};
+
+static struct s_stroke *stroke_head = NULL;
+
+static char *simple_scancodes[] = {
+	"(unknown) 0x00",
 	"escape",
-	"1",
+	"11",
 	"2",
 	"3",
 	"4",
@@ -132,7 +145,7 @@ char simple_scancodes[] = {
 	"(unknown) 0x80",
 };
 
-char multi_scancodes = {
+static char *multi_scancodes[] = {
 	"(unknown) 0xe0, 0x00",
 	"(unknown) 0xe0, 0x01",
 	"(unknown) 0xe0, 0x02",

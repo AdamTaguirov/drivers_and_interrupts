@@ -1,1 +1,0 @@
-cmd_/root/drivers_and_interrupts/new.ko := ld -r -m elf_x86_64 -z max-page-size=0x200000 -T ./scripts/module-common.lds --build-id  -o /root/drivers_and_interrupts/new.ko /root/drivers_and_interrupts/new.o /root/drivers_and_interrupts/new.mod.o ;  true
