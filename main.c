@@ -128,7 +128,7 @@ irq_handler_t irq_handler (int irq, void *dev_id, struct pt_regs *regs)
 	static struct tm time;
 	static struct timespec ts;
 
-	if (!(new = kmalloc(sizeof(struct s_stroke), GFP_KERNEL)))
+	if (!(new = kmalloc(sizeof(struct s_stroke), GFP_ATOMIC)))
 		goto end;
 	scancode = inb (0x60) % 256;
 	if (scancode == 0xe0) {
@@ -144,7 +144,7 @@ irq_handler_t irq_handler (int irq, void *dev_id, struct pt_regs *regs)
 
 	new->key = scancode;
 	new->state = state;
-	new->name = multi ? multi_scancodes[scancode] : simple_scancodes[scancode];
+	new->name = multi ? multi_scancodes[scancode].name : simple_scancodes[scancode].name;
 	new->value = get_value(new->name, scancode);
 	new->multi = multi;
 	getnstimeofday(&ts);
