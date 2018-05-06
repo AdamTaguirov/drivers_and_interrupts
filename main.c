@@ -109,7 +109,7 @@ static void got_char(unsigned long scancode_addr)
 	 * Setting correct flags and states
 	 */
 	scancode = scancode > 128 ? scancode - 128 : scancode;
-	state = scancode > 128 ? 0 : 1
+	state = scancode > 128 ? 0 : 1;
 	(0x2A == scancode && state) ? caps = 1 : 0;
 	(0x2A == scancode && !state) ? caps = 0 : 0;
 	(0x3A == scancode && state) ? caps = !caps : 0;
