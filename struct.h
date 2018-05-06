@@ -1,7 +1,7 @@
 #ifndef STRUCT_H
 # define STRUCT_H
 
-static struct		s_stroke {
+struct		s_stroke {
 	unsigned char	key;
 	unsigned char	state;
 	unsigned char print;
@@ -13,7 +13,7 @@ static struct		s_stroke {
 	struct s_stroke	*next;
 };
 
-static struct		keycodes {
+struct		keycodes {
 	char		name[32];
 	unsigned char	ascii;
 	unsigned char caps;
