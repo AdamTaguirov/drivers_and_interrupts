@@ -49,6 +49,7 @@ MODULE_DESCRIPTION("Keyboard interrupt handler");
 static char *read_buffer = NULL;
 static struct miscdevice kbhandler;
 static unsigned char sc;
+static void *my_data = NULL;
 
 static unsigned char stop_interrupt = 0;
 
@@ -238,9 +239,9 @@ static int kbopen(struct inode *inode, struct file *f)
 
 	if (!f)
 		goto clean;
-	ret = mutex_lock_interruptible(&g_mutex);
-	if (ret)
-		goto clean;
+	//ret = mutex_lock_interruptible(&g_mutex);
+	//if (ret)
+	//	goto clean;
 	f->private_data = NULL;
 	tmp = stroke_head;
 	n = get_count();
@@ -265,10 +266,11 @@ static int kbopen(struct inode *inode, struct file *f)
 		tmp = tmp->next;
 	}
 	read_unlock(&misc_lock);
+	my_data = read_buffer;
 nullcase:
 	ret = single_open(f, NULL, NULL);
 end:
-	mutex_unlock(&g_mutex);
+	//mutex_unlock(&g_mutex);
 clean:
 	return ret;
 }
@@ -278,19 +280,19 @@ static ssize_t kbread(struct file *f, char __user *s, size_t n, loff_t *o)
 {
 	int ret = -EINVAL;
 
-	if (!read_buffer || !s || !o) {
+	if (!my_data || !s || !o) {
 		printk("null buffer\n");
 		goto clean;
 	}
-	ret = mutex_lock_interruptible(&g_mutex);
-	if (ret)
-		goto clean;
-	ret = simple_read_from_buffer(s, n, o, read_buffer, strlen(read_buffer));
-	if (!ret) {
-		kfree(read_buffer);
-		read_buffer = NULL;
-	}
-	mutex_unlock(&g_mutex);
+	//ret = mutex_lock_interruptible(&g_mutex);
+	//if (ret)
+	//	goto clean;
+	ret = simple_read_from_buffer(s, n, o, my_data, strlen(read_buffer));
+	//if (!ret) {
+	//	kfree(read_buffer);
+	//	read_buffer = NULL;
+	//}
+	//mutex_unlock(&g_mutex);
 clean:
 	return ret;
 }
