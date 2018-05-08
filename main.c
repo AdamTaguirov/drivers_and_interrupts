@@ -26,6 +26,7 @@ static struct miscdevice kbhandler;
 static unsigned char sc;
 static void *my_data = NULL;
 static unsigned char destroy_request = 0;
+static unsigned char inout = 0;
 
 static unsigned char stop_interrupt = 0;
 
@@ -232,6 +233,7 @@ static int kbopen(struct inode *inode, struct file *f)
 
 	if (!f || destroy_request)
 		goto end;
+	inout = 1;
 	f->private_data = NULL;
 	tmp = stroke_head;
 	n = get_count();
@@ -249,8 +251,10 @@ static int kbopen(struct inode *inode, struct file *f)
 	read_unlock(&open_lock);
 	read_lock(&misc_lock);
 	while (tmp) {
-		if (destroy_request)
+		if (destroy_request) {
+			inout = 0;
 			return -EFAULT;
+		}
 		snprintf(buf, 256, "[%d:%d:%d] %s (%s%#x) %s\n", \
 				tmp->time.tm_hour, tmp->time.tm_min, tmp->time.tm_sec, \
 				tmp->name, \
@@ -266,6 +270,7 @@ static int kbopen(struct inode *inode, struct file *f)
 nullcase:
 	ret = single_open(f, NULL, NULL);
 end:
+	inout = 0;
 	return ret;
 }
 
@@ -312,6 +317,8 @@ static void __exit hello_cleanup(void) {
 	msleep(500);
 	write_logs();
 	if (read_buffer) {
+		while (inout)
+			;
 		kfree(read_buffer);
 		read_buffer = NULL;
 	}
